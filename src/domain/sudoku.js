@@ -1,36 +1,43 @@
+/**
+ * @typedef {Object} SudokuObject
+ * @property {function(): number[][]} getGrid - 返回棋盘的深拷贝
+ * @property {function(number, number): boolean} isFixedCell - 判断指定格是否为固定题面格
+ * @property {function({ row: number, col: number, value: number|null }): boolean} guess - 填入数字，返回是否产生变化
+ * @property {function(): SudokuObject} clone - 生成独立副本
+ * @property {function(): Array<{ row: number, col: number }>} getInvalidCells - 返回冲突格坐标列表
+ * @property {function(): { grid: number[][], fixed: boolean[][] }} toJSON - 序列化
+ * @property {function(): string} toString - 格式化输出
+ */
+
 const BOX_SIZE = 3;
 const SUDOKU_SIZE = 9;
 
 /**
- * 功能：返回棋盘数据的深拷贝。
- * 上下文：此函数在 Sudoku 对外暴露 grid 时被调用，例如 getGrid() 和 toJSON()。
- * 逻辑：grid 是二维数组，不能只复制最外层数组；这里通过逐行 slice() 复制每一行，
- * 从而避免调用方修改返回值时污染领域对象内部状态。
+ * 深拷贝 9x9 棋盘二维数组，防止外部修改污染内部状态。
  *
- * @param {number[][]} grid
- * @returns {number[][]}
+ * @param {number[][]} grid - 9x9 数独棋盘
+ * @returns {number[][]} grid 的深拷贝
  */
 function copyGrid(grid) {
 	return grid.map(row => row.slice());
 }
 
 /**
- * 功能：返回固定题面标记的深拷贝。
- * 上下文：固定格是数独领域规则的一部分，clone()、toJSON() 和反序列化都会复用这份数据。
+ * 深拷贝固定题面格掩码。
  *
- * @param {boolean[][]} fixedCells
- * @returns {boolean[][]}
+ * @param {boolean[][]} fixedCells - 9x9 布尔矩阵，true 表示该格为 givens
+ * @returns {boolean[][]} fixedCells 的深拷贝
  */
 function copyFixedCells(fixedCells) {
 	return fixedCells.map(row => row.slice());
 }
 
 /**
- * 功能：校验单个单元格的值是否合法。
- * 上下文：此函数会在标准化初始棋盘和 move 输入时复用，保证领域对象内部状态始终一致。
+ * 校验并标准化单元格值，null 转为 0。
  *
- * @param {number | null} value
- * @returns {number}
+ * @param {number|null} value - 单元格值，合法范围 0-9 或 null
+ * @returns {number} 标准化后的值（0-9）
+ * @throws {TypeError} 值不是 0-9 整数时抛出
  */
 function normalizeCellValue(value) {
 	if (value === null) {
@@ -45,11 +52,11 @@ function normalizeCellValue(value) {
 }
 
 /**
- * 功能：校验并标准化整张 9x9 棋盘。
- * 上下文：createSudoku() 与 createSudokuFromJSON() 都通过此函数保证内部存储结构合法。
+ * 校验并标准化整张 9x9 棋盘。
  *
- * @param {number[][]} input
- * @returns {number[][]}
+ * @param {number[][]} input - 待校验的二维数组
+ * @returns {number[][]} 标准化后的 9x9 棋盘
+ * @throws {TypeError} 结构不符合 9x9 要求时抛出
  */
 function normalizeGrid(input) {
 	if (!Array.isArray(input) || input.length !== SUDOKU_SIZE) {
@@ -66,22 +73,21 @@ function normalizeGrid(input) {
 }
 
 /**
- * 功能：根据初始题面推导固定格掩码。
- * 上下文：当调用 createSudoku(grid) 创建新题目时，所有非 0 初始数字都应视为 givens。
+ * 根据初始题面推导固定格掩码，非零值视为 givens。
  *
- * @param {number[][]} grid
- * @returns {boolean[][]}
+ * @param {number[][]} grid - 标准化后的 9x9 棋盘
+ * @returns {boolean[][]} 9x9 布尔矩阵
  */
 function deriveFixedCells(grid) {
 	return grid.map(row => row.map(cell => cell !== 0));
 }
 
 /**
- * 功能：校验并标准化固定格掩码。
- * 上下文：当 Sudoku 从 JSON 恢复时，需要确保 fixed 字段也是一个合法的 9x9 布尔矩阵。
+ * 校验并标准化固定格掩码，确保为合法的 9x9 布尔矩阵。
  *
- * @param {boolean[][]} fixedCells
- * @returns {boolean[][]}
+ * @param {boolean[][]} fixedCells - 待校验的固定格数据
+ * @returns {boolean[][]} 校验通过的布尔矩阵
+ * @throws {TypeError} 结构或类型不合法时抛出
  */
 function normalizeFixedCells(fixedCells) {
 	if (!Array.isArray(fixedCells) || fixedCells.length !== SUDOKU_SIZE) {
@@ -104,13 +110,15 @@ function normalizeFixedCells(fixedCells) {
 }
 
 /**
- * 功能：校验并标准化一次输入操作。
- * 上下文：当前实现没有把 move 单独设计成领域对象，因此 Sudoku.guess() 直接调用此函数完成输入校验。
- * 逻辑：要求 move 至少包含 row、col、value 三个字段；其中 row 和 col 必须落在 9x9 棋盘范围内，
- * value 复用单元格值校验逻辑，并把 null 统一转换为 0。
+ * 校验并标准化一次用户输入操作。
  *
- * @param {{ row: number, col: number, value: number | null }} move
- * @returns {{ row: number, col: number, value: number }}
+ * @param {Object} move - 用户输入
+ * @param {number} move.row - 行索引（0-8）
+ * @param {number} move.col - 列索引（0-8）
+ * @param {number|null} move.value - 填入的数字（1-9）或清除（0/null）
+ * @returns {{ row: number, col: number, value: number }} 标准化后的 move
+ * @throws {TypeError} move 不是对象时抛出
+ * @throws {RangeError} row/col 超出范围时抛出
  */
 function normalizeMove(move) {
 	if (!move || typeof move !== 'object') {
@@ -132,11 +140,11 @@ function normalizeMove(move) {
 }
 
 /**
- * 功能：校验坐标参数。
- * 上下文：领域层中多个方法都需要读取指定位置的状态，例如判断某格是否为固定题面格。
+ * 校验坐标是否在 9x9 棋盘范围内。
  *
- * @param {number} row
- * @param {number} col
+ * @param {number} row - 行索引（0-8）
+ * @param {number} col - 列索引（0-8）
+ * @throws {RangeError} 坐标超出范围时抛出
  */
 function validatePosition(row, col) {
 	if (!Number.isInteger(row) || row < 0 || row >= SUDOKU_SIZE) {
@@ -149,11 +157,10 @@ function validatePosition(row, col) {
 }
 
 /**
- * 功能：统计棋盘中已填写与未填写格子数量。
- * 上下文：toString() 会通过此函数补充调试摘要信息，便于快速判断当前局面状态。
+ * 统计棋盘中已填写与未填写的格子数量。
  *
- * @param {number[][]} grid
- * @returns {{ filled: number, empty: number }}
+ * @param {number[][]} grid - 9x9 数独棋盘
+ * @returns {{ filled: number, empty: number }} 填写统计
  */
 function countCellStats(grid) {
 	let filled = 0;
@@ -173,11 +180,10 @@ function countCellStats(grid) {
 }
 
 /**
- * 功能：把当前棋盘格式化为便于调试阅读的字符串。
- * 上下文：此函数为 Sudoku.toString() 服务，用于测试和人工检查当前局面。
+ * 将棋盘格式化为可读字符串，用于调试输出。
  *
- * @param {number[][]} grid
- * @returns {string}
+ * @param {number[][]} grid - 9x9 数独棋盘
+ * @returns {string} 格式化的棋盘字符串
  */
 function buildGridString(grid) {
 	const { filled, empty } = countCellStats(grid);
@@ -208,13 +214,10 @@ function buildGridString(grid) {
 }
 
 /**
- * 功能：扫描当前棋盘中的冲突格子。
- * 上下文：此函数为 Sudoku.getInvalidCells() 提供底层实现，结果会被 UI 用来做冲突高亮。
- * 逻辑：对每个非零格子分别检查同行、同列和同一个 3x3 宫内是否存在相同数字；
- * 一旦发现重复，就把相关坐标按 "x,y" 的形式写入集合，最终返回唯一冲突位置列表。
+ * 扫描棋盘中所有冲突格子（同行/同列/同宫内重复）。
  *
- * @param {number[][]} grid
- * @returns {string[]}
+ * @param {number[][]} grid - 9x9 数独棋盘
+ * @returns {Array<{ row: number, col: number }>} 冲突格坐标列表
  */
 function collectInvalidCells(grid) {
 	const invalid = new Set();
@@ -263,19 +266,12 @@ function collectInvalidCells(grid) {
 }
 
 /**
- * 功能：基于已标准化的状态创建 Sudoku 领域对象。
- * 上下文：createSudoku() 与 createSudokuFromJSON() 最终都会走到这里，以共享一致的领域行为实现。
+ * 基于已标准化的状态创建 Sudoku 领域对象（内部工厂）。
  *
- * @param {{ grid: number[][], fixedCells: boolean[][] }} state
- * @returns {{
- *   getGrid(): number[][],
- *   isFixedCell(row: number, col: number): boolean,
- *   guess(move: { row: number, col: number, value: number | null }): boolean,
- *   clone(): ReturnType<typeof createSudoku>,
- *   getInvalidCells(): Array<{ row: number, col: number }>,
- *   toJSON(): { grid: number[][], fixed: boolean[][] },
- *   toString(): string,
- * }}
+ * @param {Object} state - 已标准化的初始状态
+ * @param {number[][]} state.grid - 9x9 棋盘数据
+ * @param {boolean[][]} state.fixedCells - 9x9 固定格掩码
+ * @returns {SudokuObject} Sudoku 领域对象
  */
 function createSudokuFromState({ grid, fixedCells }) {
 	let currentGrid = copyGrid(grid);
@@ -331,21 +327,14 @@ function createSudokuFromState({ grid, fixedCells }) {
 }
 
 /**
- * 功能：创建 Sudoku 领域对象。
- * 上下文：这是领域层对“当前数独局面”的核心入口，UI 层和 Game 对象都会通过它持有棋盘状态。
- * 逻辑：创建时先校验并深拷贝输入 grid，之后通过闭包封装内部状态，对外只暴露必要行为，
+ * 创建 Sudoku 领域对象。
+ *
+ * 通过闭包封装内部状态，对外只暴露不可变接口，
  * 避免调用方直接持有可变引用。
  *
- * @param {number[][]} input
- * @returns {{
- *   getGrid(): number[][],
- *   isFixedCell(row: number, col: number): boolean,
- *   guess(move: { row: number, col: number, value: number | null }): boolean,
- *   clone(): ReturnType<typeof createSudoku>,
- *   getInvalidCells(): Array<{ row: number, col: number }>,
- *   toJSON(): { grid: number[][], fixed: boolean[][] },
- *   toString(): string,
- * }}
+ * @param {number[][]} input - 9x9 初始棋盘，非零值自动标记为 givens
+ * @returns {SudokuObject} Sudoku 领域对象
+ * @throws {TypeError} 棋盘结构不合法时抛出
  */
 export function createSudoku(input) {
 	const grid = normalizeGrid(input);
@@ -357,14 +346,13 @@ export function createSudoku(input) {
 }
 
 /**
- * 功能：根据序列化数据恢复 Sudoku 领域对象。
- * 上下文：此函数在反串行化流程中被调用，例如恢复历史快照、恢复保存状态。
- * 逻辑：同时兼容两种输入形式：
- * 1. 直接传入 9x9 二维数组
- * 2. 传入形如 { grid } 的序列化结果
+ * 从序列化数据恢复 Sudoku 领域对象。
  *
- * @param {{ grid: number[][] } | number[][]} json
- * @returns {ReturnType<typeof createSudoku>}
+ * 兼容两种输入：直接传入 9x9 二维数组，或传入 `{ grid, fixed }` 结构。
+ *
+ * @param {number[][]|{ grid: number[][], fixed?: boolean[][] }} json - 序列化数据
+ * @returns {SudokuObject} 恢复后的 Sudoku 领域对象
+ * @throws {TypeError} 输入格式不合法时抛出
  */
 export function createSudokuFromJSON(json) {
 	if (Array.isArray(json)) {

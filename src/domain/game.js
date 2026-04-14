@@ -1,36 +1,49 @@
 import { createSudokuFromJSON } from './sudoku.js';
 
 /**
- * 功能：把当前 Sudoku 状态导出为历史快照。
- * 上下文：此函数在 Game 的 undo/redo 历史记录中被调用。
- * 逻辑：当前设计保存的是整张棋盘快照，而不是 move 列表；
- * 这样 undo/redo 时可以直接恢复状态，不需要反向推导领域逻辑。
+ * @typedef {import('./sudoku.js').SudokuObject} SudokuObject
+ */
+
+/**
+ * @typedef {Object} GameObject
+ * @property {function(): SudokuObject} getSudoku - 返回当前棋盘的独立副本
+ * @property {function({ row: number, col: number, value: number|null }): boolean} guess - 填入数字并记录历史
+ * @property {function(): boolean} undo - 撤销上一步
+ * @property {function(): boolean} redo - 重做上一步
+ * @property {function(): boolean} canUndo - 是否可撤销
+ * @property {function(): boolean} canRedo - 是否可重做
+ * @property {function(number, number): boolean} isFixedCell - 判断指定格是否为固定题面格
+ * @property {function(): Object} toJSON - 序列化当前会话
+ * @property {function(): string} toString - 格式化输出
+ */
+
+/**
+ * 将当前 Sudoku 状态导出为历史快照。
  *
- * @param {{ toJSON(): { grid: number[][] } }} sudoku
- * @returns {{ grid: number[][] }}
+ * @param {SudokuObject} sudoku - 当前 Sudoku 对象
+ * @returns {{ grid: number[][], fixed: boolean[][] }} 快照数据
  */
 function snapshotSudoku(sudoku) {
 	return sudoku.toJSON();
 }
 
 /**
- * 功能：复制单个历史快照。
- * 上下文：此函数在构造 undo/redo 历史栈时被调用。
- * 逻辑：通过“反串行化再串行化”的方式生成新快照，避免不同历史节点共享内部数组引用。
+ * 通过反序列化-再序列化复制单个历史快照，避免引用共享。
  *
- * @param {{ grid: number[][] }} snapshot
- * @returns {{ grid: number[][] }}
+ * @param {{ grid: number[][], fixed?: boolean[][] }} snapshot - 待复制的快照
+ * @returns {{ grid: number[][], fixed: boolean[][] }} 独立的快照副本
  */
 function cloneSnapshot(snapshot) {
 	return createSudokuFromJSON(snapshot).toJSON();
 }
 
 /**
- * 功能：复制整条历史栈。
- * 上下文：createGame() 和 toJSON() 都会通过此函数确保历史记录彼此独立。
+ * 深拷贝整条历史栈。
  *
- * @param {Array<{ grid: number[][] }>} history
- * @returns {Array<{ grid: number[][] }>}
+ * @param {Array<{ grid: number[][], fixed?: boolean[][] }>} history - 历史快照数组
+ * @param {string} fieldName - 字段名称，用于错误提示
+ * @returns {Array<{ grid: number[][], fixed: boolean[][] }>} 独立的历史栈副本
+ * @throws {TypeError} history 不是数组时抛出
  */
 function cloneHistory(history, fieldName) {
 	if (!Array.isArray(history)) {
@@ -41,12 +54,12 @@ function cloneHistory(history, fieldName) {
 }
 
 /**
- * 功能：把输入的 sudoku 参数标准化为领域对象。
- * 上下文：createGame() 既支持传入现成 Sudoku 对象，也支持传入其序列化结果。
- * 逻辑：如果输入已经是领域对象，则先 clone()；如果只是 plain data，则走反串行化恢复。
+ * 将输入标准化为 Sudoku 领域对象。
  *
- * @param {ReturnType<typeof createSudokuFromJSON> | { grid: number[][] }} sudoku
- * @returns {ReturnType<typeof createSudokuFromJSON>}
+ * 支持传入现成的 Sudoku 对象（自动 clone）或序列化数据。
+ *
+ * @param {SudokuObject|{ grid: number[][] }} sudoku - Sudoku 对象或其序列化结果
+ * @returns {SudokuObject} 独立的 Sudoku 实例
  */
 function normalizeSudokuInput(sudoku) {
 	if (sudoku && typeof sudoku.clone === 'function' && typeof sudoku.toJSON === 'function') {
@@ -57,23 +70,14 @@ function normalizeSudokuInput(sudoku) {
 }
 
 /**
- * 功能：创建 Game 领域对象。
- * 上下文：这是领域层对“一局游戏会话”的核心入口，负责连接当前棋盘与 undo/redo 历史。
- * 逻辑：Game 内部同时维护 activeSudoku、undoHistory、redoHistory 三份状态：
- * activeSudoku 表示当前局面，undoHistory 表示可撤销历史，redoHistory 表示可重做历史。
+ * 创建 Game 领域对象，管理当前棋盘与 undo/redo 历史。
  *
- * @param {{ sudoku: ReturnType<typeof createSudokuFromJSON>, undoStack?: Array<{ grid: number[][] }>, redoStack?: Array<{ grid: number[][] }> }} param0
- * @returns {{
- *   getSudoku(): ReturnType<typeof createSudokuFromJSON>,
- *   guess(move: { row: number, col: number, value: number | null }): boolean,
- *   undo(): boolean,
- *   redo(): boolean,
- *   canUndo(): boolean,
- *   canRedo(): boolean,
- *   isFixedCell(row: number, col: number): boolean,
- *   toJSON(): { sudoku: { grid: number[][], fixed: boolean[][] }, undoStack: Array<{ grid: number[][], fixed: boolean[][] }>, redoStack: Array<{ grid: number[][], fixed: boolean[][] }> },
- *   toString(): string,
- * }}
+ * @param {Object} options - 创建选项
+ * @param {SudokuObject} options.sudoku - 当前 Sudoku 实例
+ * @param {Array<{ grid: number[][], fixed?: boolean[][] }>} [options.undoStack=[]] - 撤销历史栈
+ * @param {Array<{ grid: number[][], fixed?: boolean[][] }>} [options.redoStack=[]] - 重做历史栈
+ * @returns {GameObject} Game 领域对象
+ * @throws {TypeError} 缺少 sudoku 参数时抛出
  */
 export function createGame({ sudoku, undoStack = [], redoStack = [] } = {}) {
 	if (!sudoku) {
@@ -85,22 +89,18 @@ export function createGame({ sudoku, undoStack = [], redoStack = [] } = {}) {
 	let redoHistory = cloneHistory(redoStack, 'redoStack');
 
 	/**
-	 * 功能：用历史快照替换当前棋盘状态。
-	 * 上下文：此函数只在 undo() 和 redo() 流程中被调用。
-	 * 逻辑：不直接复用历史中的旧引用，而是重新创建 Sudoku 对象，
-	 * 从而保证当前状态和历史状态之间没有共享引用。
+	 * 用历史快照替换当前棋盘状态。
 	 *
-	 * @param {{ grid: number[][] }} snapshot
+	 * @param {{ grid: number[][], fixed?: boolean[][] }} snapshot - 目标快照
 	 */
 	function restore(snapshot) {
 		activeSudoku = createSudokuFromJSON(snapshot);
 	}
 
 	/**
-	 * 功能：读取当前局面的快照。
-	 * 上下文：guess()、undo()、redo() 和 toJSON() 都会复用此函数。
+	 * 读取当前局面的快照。
 	 *
-	 * @returns {{ grid: number[][] }}
+	 * @returns {{ grid: number[][], fixed: boolean[][] }} 当前棋盘快照
 	 */
 	function getCurrentSnapshot() {
 		return snapshotSudoku(activeSudoku);
@@ -119,8 +119,7 @@ export function createGame({ sudoku, undoStack = [], redoStack = [] } = {}) {
 				return false;
 			}
 
-			// 这里先由 Sudoku 负责 move 校验、固定格约束和 no-op 判断，
-			// Game 只在真正发生变化时记录历史，从而保持“盘面规则”和“会话历史”边界清晰。
+			// Sudoku 负责 move 校验与固定格约束，Game 只在变化时记录历史。
 			undoHistory.push(previousSnapshot);
 			redoHistory = [];
 			return true;
@@ -177,13 +176,14 @@ export function createGame({ sudoku, undoStack = [], redoStack = [] } = {}) {
 }
 
 /**
- * 功能：根据序列化数据恢复 Game 会话对象。
- * 上下文：此函数在反串行化流程中被调用，用于恢复当前棋盘和历史栈。
- * 逻辑：先恢复当前 Sudoku，再把 undoStack 和 redoStack 一并交给 createGame()，
- * 从而得到一个可继续执行 guess / undo / redo 的完整会话对象。
+ * 从序列化数据恢复 Game 会话对象。
  *
- * @param {{ sudoku: { grid: number[][] }, undoStack?: Array<{ grid: number[][] }>, redoStack?: Array<{ grid: number[][] }> }} json
- * @returns {ReturnType<typeof createGame>}
+ * @param {Object} json - 序列化数据
+ * @param {{ grid: number[][], fixed?: boolean[][] }} json.sudoku - Sudoku 序列化数据
+ * @param {Array<{ grid: number[][], fixed?: boolean[][] }>} [json.undoStack] - 撤销历史
+ * @param {Array<{ grid: number[][], fixed?: boolean[][] }>} [json.redoStack] - 重做历史
+ * @returns {GameObject} 恢复后的 Game 对象
+ * @throws {TypeError} 输入不是对象时抛出
  */
 export function createGameFromJSON(json) {
 	if (!json || typeof json !== 'object') {
